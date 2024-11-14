@@ -28,6 +28,10 @@ class BrushLabelingApp:
         self.mask_cleared = False  # Flag to indicate if the mask was cleared by generate or inpaint
         self.base_image_path = None  # Path to the base image for reload functionality
 
+        # Batch generation variables
+        self.batch_amount = tk.IntVar(value=1)
+        self.batch_filename = tk.StringVar(value="batch_output")
+
         # Set up labeled pixels mask
         self.labeled_pixels_mask = np.zeros((self.canvas_height, self.canvas_width), dtype=bool)
         
@@ -89,6 +93,22 @@ class BrushLabelingApp:
         self.save_button = tk.Button(undo_frame, text="Save", command=self.save_image, state="disabled")
         self.save_button.pack(side=tk.TOP, fill=tk.X, pady=2)
 
+        # Batch frame in the fourth column
+        batch_frame = tk.Frame(control_frame)
+        batch_frame.grid(row=0, column=4, rowspan=2, padx=10, pady=5, sticky="n")
+
+        batch_label = tk.Label(batch_frame, text="Batch")
+        batch_label.pack(side=tk.TOP, fill=tk.X, pady=2)
+
+        self.batch_spinbox = tk.Spinbox(batch_frame, from_=1, to=100, textvariable=self.batch_amount, width=5)
+        self.batch_spinbox.pack(side=tk.TOP, fill=tk.X, pady=2)
+
+        self.batch_filename_entry = tk.Entry(batch_frame, textvariable=self.batch_filename, state="disabled")
+        self.batch_filename_entry.pack(side=tk.TOP, fill=tk.X, pady=2)
+        self.batch_filename_entry.insert(0, "batch_output")
+
+        # Now set up the trace after batch_filename_entry is defined
+        self.batch_amount.trace('w', self.batch_amount_changed)
 
         # Bind events
         self.canvas.bind("<Motion>", self.update_brush_position)
@@ -100,6 +120,17 @@ class BrushLabelingApp:
         self.root.bind("<KeyPress-]>", self.increase_radius)       # Bind ] key
         self.root.bind("<KeyPress-Up>", self.increase_radius)      # Bind Up arrow key
         self.root.bind("<KeyPress-Down>", self.decrease_radius)    # Bind Down arrow key
+
+    def batch_amount_changed(self, *args):
+        try:
+            batch_value = int(self.batch_amount.get())
+            if batch_value > 1:
+                self.batch_filename_entry.config(state="normal")
+            else:
+                self.batch_filename_entry.config(state="disabled")
+        except ValueError:
+            # Invalid input, disable the batch filename entry
+            self.batch_filename_entry.config(state="disabled")
 
     def update_brush_position(self, event):
         if not self.drawing:
@@ -189,43 +220,96 @@ class BrushLabelingApp:
             print("Please enter a prompt.")
             return
 
-        # Call the generate_picture function from make_picture.py
-        output_path = "generated_image.png"
-        make_picture.generate_image(prompt=prompt, output=output_path, model_name=selected_model)
+        # Get batch amount
+        try:
+            batch_value = int(self.batch_amount.get())
+        except ValueError:
+            batch_value = 1
 
-        # Load the generated image
-        self.image = Image.open(output_path).convert("RGBA")
-        self.photo = ImageTk.PhotoImage(self.image)
-        
-        # Display the generated image on the canvas by updating the image item
-        self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
-        
-        # Reset the overlay and labeled pixels mask for a new image
-        self.labeled_pixels_mask = np.zeros((self.canvas_height, self.canvas_width), dtype=bool)
-        # Keep only the last state
-        if self.mask_states:
-            self.mask_states = [self.mask_states[-1]]
+        if batch_value <= 1:
+            # Existing logic
+            output_path = "generated_image.png"
+            make_picture.generate_image(prompt=prompt, output=output_path, model_name=selected_model)
+
+            # Load the generated image
+            self.image = Image.open(output_path).convert("RGBA")
+            self.photo = ImageTk.PhotoImage(self.image)
+            
+            # Display the generated image on the canvas by updating the image item
+            self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
+            
+            # Reset the overlay and labeled pixels mask for a new image
+            self.labeled_pixels_mask = np.zeros((self.canvas_height, self.canvas_width), dtype=bool)
+            # Keep only the last state
+            if self.mask_states:
+                self.mask_states = [self.mask_states[-1]]
+            else:
+                self.mask_states = []
+            self.mask_cleared = True
+            self.undo_button.config(text="Restore mask")
+            self.update_undo_button_state()
+
+            self.overlay = Image.new("RGBA", (self.canvas_width, self.canvas_height))
+            self.overlay_tk = ImageTk.PhotoImage(self.overlay)
+            self.canvas.itemconfig(self.overlay_canvas, image=self.overlay_tk)
+            
+            # Update base image path
+            self.base_image_path = output_path
+            # Disable Reload button since we just generated a new image
+            self.reload_button.config(state="disabled")
+            # Enable Save button
+            self.save_button.config(state="normal")
+
+            # Disable the toggle mask button and inpaint button since there's no label data
+            self.update_toggle_button_state()
+            self.update_inpaint_button_state()
+            self.update_generate_button_state()
         else:
-            self.mask_states = []
-        self.mask_cleared = True
-        self.undo_button.config(text="Restore mask")
-        self.update_undo_button_state()
+            # Batch generation logic
+            batch_name = self.batch_filename.get().strip()
+            if not batch_name:
+                batch_name = "batch_output"
 
-        self.overlay = Image.new("RGBA", (self.canvas_width, self.canvas_height))
-        self.overlay_tk = ImageTk.PhotoImage(self.overlay)
-        self.canvas.itemconfig(self.overlay_canvas, image=self.overlay_tk)
-        
-        # Update base image path
-        self.base_image_path = output_path
-        # Disable Reload button since we just generated a new image
-        self.reload_button.config(state="disabled")
-        # Enable Save button
-        self.save_button.config(state="normal")
+            for i in range(1, batch_value + 1):
+                output_path = f"{batch_name}_{i}.png"
+                make_picture.generate_image(prompt=prompt, output=output_path, model_name=selected_model)
+                print(f"Generated image saved to {output_path}")
 
-        # Disable the toggle mask button and inpaint button since there's no label data
-        self.update_toggle_button_state()
-        self.update_inpaint_button_state()
-        self.update_generate_button_state()
+            # Optionally, load the last generated image into the canvas
+            last_output_path = f"{batch_name}_{batch_value}.png"
+            if os.path.exists(last_output_path):
+                self.image = Image.open(last_output_path).convert("RGBA")
+                self.photo = ImageTk.PhotoImage(self.image)
+                self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
+                
+                # Reset the overlay and labeled pixels mask for a new image
+                self.labeled_pixels_mask = np.zeros((self.canvas_height, self.canvas_width), dtype=bool)
+                # Keep only the last state
+                if self.mask_states:
+                    self.mask_states = [self.mask_states[-1]]
+                else:
+                    self.mask_states = []
+                self.mask_cleared = True
+                self.undo_button.config(text="Restore mask")
+                self.update_undo_button_state()
+
+                self.overlay = Image.new("RGBA", (self.canvas_width, self.canvas_height))
+                self.overlay_tk = ImageTk.PhotoImage(self.overlay)
+                self.canvas.itemconfig(self.overlay_canvas, image=self.overlay_tk)
+                
+                # Update base image path
+                self.base_image_path = last_output_path
+                # Disable Reload button since we just generated a new image
+                self.reload_button.config(state="disabled")
+                # Enable Save button
+                self.save_button.config(state="normal")
+
+                # Disable the toggle mask button and inpaint button since there's no label data
+                self.update_toggle_button_state()
+                self.update_inpaint_button_state()
+                self.update_generate_button_state()
+            else:
+                print(f"Failed to load the last generated image: {last_output_path}")
 
     def toggle_mask(self):
         # Toggle mask visibility
@@ -366,7 +450,6 @@ class BrushLabelingApp:
         self.reload_button.config(state="normal")
         # Enable Save button
         self.save_button.config(state="normal")
-
 
     def open_image(self):
         file_path = filedialog.askopenfilename(
